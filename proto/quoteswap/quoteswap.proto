@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package quoteswap;
+
+option go_package = "go/quoteswap";
+
+service QuoteSwapService {
+  rpc GetQuote (GetQuoteRequest) returns (GetQuoteResponse);
+  rpc ExecuteSwap (ExecuteTxRequest) returns (ExecuteTxResponse);
+}
+
+message GetQuoteRequest {
+  string token_in = 1;
+  string token_out = 2;
+  uint64 amount = 3;
+  string dex = 4;
+  uint32 slippage_bps = 5;
+  string chain = 6;
+}
+
+message GetQuoteResponse {
+  string input_token = 1;
+  string in_amount = 2;
+  string output_token = 3;
+  string out_amount = 4;
+  int32 slippage_bps = 5;
+  string dex = 6;
+  string chain = 7;
+}
+
+message ExecuteTxRequest {
+  GetQuoteResponse quoting_response = 1;
+  string recipient_address = 2;
+}
+
+message ExecuteTxResponse {
+  string transaction_hash = 1;
+  TransactionStatus status = 2;
+  double sell_token_qty = 3;
+  Error error = 4;
+  double executed_price = 5;
+}
+
+enum TransactionStatus {
+  UNKNOWN = 0;
+  SUCCESS = 1;
+  FAILED = 2;
+  PENDING = 3;
+}
+
+message Error {
+  int32 code = 1;
+  string message = 2;
+}
+
