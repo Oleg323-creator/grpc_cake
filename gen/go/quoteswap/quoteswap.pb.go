@@ -251,11 +251,10 @@ func (x *GetQuoteResponse) GetChain() string {
 }
 
 type ExecuteTxRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	QuotingResponse  *GetQuoteResponse      `protobuf:"bytes,1,opt,name=quoting_response,json=quotingResponse,proto3" json:"quoting_response,omitempty"`
-	RecipientAddress string                 `protobuf:"bytes,2,opt,name=recipient_address,json=recipientAddress,proto3" json:"recipient_address,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	QuotingResponse *GetQuoteResponse      `protobuf:"bytes,1,opt,name=quoting_response,json=quotingResponse,proto3" json:"quoting_response,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ExecuteTxRequest) Reset() {
@@ -293,13 +292,6 @@ func (x *ExecuteTxRequest) GetQuotingResponse() *GetQuoteResponse {
 		return x.QuotingResponse
 	}
 	return nil
-}
-
-func (x *ExecuteTxRequest) GetRecipientAddress() string {
-	if x != nil {
-		return x.RecipientAddress
-	}
-	return ""
 }
 
 type ExecuteTxResponse struct {
@@ -451,10 +443,9 @@ const file_quoteswap_quoteswap_proto_rawDesc = "" +
 	"out_amount\x18\x04 \x01(\tR\toutAmount\x12!\n" +
 	"\fslippage_bps\x18\x05 \x01(\x05R\vslippageBps\x12\x10\n" +
 	"\x03dex\x18\x06 \x01(\tR\x03dex\x12\x14\n" +
-	"\x05chain\x18\a \x01(\tR\x05chain\"\x87\x01\n" +
+	"\x05chain\x18\a \x01(\tR\x05chain\"Z\n" +
 	"\x10ExecuteTxRequest\x12F\n" +
-	"\x10quoting_response\x18\x01 \x01(\v2\x1b.quoteswap.GetQuoteResponseR\x0fquotingResponse\x12+\n" +
-	"\x11recipient_address\x18\x02 \x01(\tR\x10recipientAddress\"\xe9\x01\n" +
+	"\x10quoting_response\x18\x01 \x01(\v2\x1b.quoteswap.GetQuoteResponseR\x0fquotingResponse\"\xe9\x01\n" +
 	"\x11ExecuteTxResponse\x12)\n" +
 	"\x10transaction_hash\x18\x01 \x01(\tR\x0ftransactionHash\x124\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1c.quoteswap.TransactionStatusR\x06status\x12$\n" +

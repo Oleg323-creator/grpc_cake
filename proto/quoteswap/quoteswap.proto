@@ -30,7 +30,6 @@ message GetQuoteResponse {
 
 message ExecuteTxRequest {
   GetQuoteResponse quoting_response = 1;
-  string recipient_address = 2;
 }
 
 message ExecuteTxResponse {

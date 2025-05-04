@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"strings"
@@ -61,7 +60,6 @@ func (v *V3) GetQuote(ctx context.Context, req *quoteswap.GetQuoteRequest) (resp
 	tokenOut := common.HexToAddress(req.TokenOut)
 	amountIn := new(big.Int).SetUint64(req.Amount)
 	callOpts := &bind.CallOpts{Context: ctx}
-	//path := createPath(tokenIn, tokenOut)
 
 	// To check all possible pools.
 	fees := []*big.Int{big.NewInt(500), big.NewInt(1000), big.NewInt(3000), big.NewInt(10000)}
@@ -72,9 +70,9 @@ func (v *V3) GetQuote(ctx context.Context, req *quoteswap.GetQuoteRequest) (resp
 			tokenOut.Bytes(),
 		}, nil)
 
-		outAmount, err := v.quoterV2.QuoteExactInput(callOpts, path, amountIn)
-
 		logrus.Infof("Request parameters: TokenIn: %s, TokenOut: %s, Amount: %d, Slippage: %d, Chain: %s", tokenIn, tokenOut, req.Amount, req.SlippageBps, req.Chain)
+
+		outAmount, err := v.quoterV2.QuoteExactInput(callOpts, path, amountIn)
 		if err == nil {
 			resp = &quoteswap.GetQuoteResponse{
 				InputToken:  req.TokenIn,
@@ -89,46 +87,44 @@ func (v *V3) GetQuote(ctx context.Context, req *quoteswap.GetQuoteRequest) (resp
 		}
 	}
 
-	return nil, errors.New(fmt.Sprintf("failed to get quote: %v", err))
+	return nil, fmt.Errorf("failed to get quote: %v", err)
 }
 
 func (v *V3) ExecuteSwap(ctx context.Context, req *quoteswap.ExecuteTxRequest) (resp *quoteswap.ExecuteTxResponse, err error) {
 	quote := req.QuotingResponse
+
 	amountIn := new(big.Int)
 	amountIn.SetString(quote.InAmount, 10)
 
+	amountOut := new(big.Int)
+	amountOut.SetString(quote.OutAmount, 10)
+
 	tokenIn := common.HexToAddress(quote.InputToken)
 	tokenOut := common.HexToAddress(quote.OutputToken)
-	to := common.HexToAddress(req.RecipientAddress)
 
-	log.Printf("ExecuteSwap request: InAmount: %s, InputToken: %s, OutputToken: %s, Recipient: %s",
-		quote.InAmount, quote.InputToken, quote.OutputToken, req.RecipientAddress)
+	recipient := common.HexToAddress(os.Getenv("RECIPIENT_ADDR"))
 
-	err = v.approveToken(ctx, tokenIn, to, v.routerAddress, amountIn)
+	err = v.approveToken(ctx, tokenIn, recipient, v.routerAddress, amountIn)
 	if err != nil {
 		resp = &quoteswap.ExecuteTxResponse{
 			Status: quoteswap.TransactionStatus_FAILED,
 			Error: &quoteswap.Error{
-				Code:    1,
-				Message: fmt.Sprintf("approval failed: %v", err),
+				Code:    5,
+				Message: err.Error(),
 			},
 		}
 
 		return resp, err
 	}
 
-	amountOutMin := big.NewInt(0)
 	deadline := big.NewInt(time.Now().Add(10 * time.Minute).Unix())
 
-	log.Printf("amountIn: %s", amountIn.String())
-	log.Printf("amountOutMin: %s", amountOutMin.String())
-	log.Printf("to: %s", to)
+	logrus.Infof("Preparing swap with parameters:\n TokenIn: %s;\n TokenOut: %s;\n AmountIn: %s;\n AmountOutMin: %s;\n Recipient: %s;\n Deadline: %s;\n",
+		tokenIn.Hex(), tokenOut.Hex(), amountIn.String(), amountOut.String(), recipient.Hex(), deadline.String())
 
-	log.Printf("Calculated amountOutMin: %s, deadline: %s", amountOutMin.String(), deadline.String())
-
-	log.Printf("Preparing swap with parameters: TokenIn: %s, TokenOut: %s, AmountIn: %s, AmountOutMin: %s, Recipient: %s, Deadline: %s",
-		tokenIn.Hex(), tokenOut.Hex(), amountIn.String(), amountOutMin.String(), to.Hex(), deadline.String())
 	var tx *types.Transaction
+	var opts *bind.TransactOpts
+
 	// To check all possible pools.
 	fees := []*big.Int{big.NewInt(500), big.NewInt(1000), big.NewInt(3000), big.NewInt(10000)}
 	for _, fee := range fees {
@@ -136,156 +132,129 @@ func (v *V3) ExecuteSwap(ctx context.Context, req *quoteswap.ExecuteTxRequest) (
 			TokenIn:           tokenIn,
 			TokenOut:          tokenOut,
 			Fee:               fee,
-			Recipient:         to,
+			Recipient:         recipient,
 			Deadline:          deadline,
 			AmountIn:          amountIn,
-			AmountOutMinimum:  amountOutMin,
+			AmountOutMinimum:  amountOut,
 			SqrtPriceLimitX96: new(big.Int).SetBytes(make([]byte, 32)),
 		}
-		log.Printf("Params: TokenIn: %s, TokenOut: %s, Fee: %s, Recipient: %s, Deadline: %s, AmountIn: %s, AmountOutMin: %s, SqrtPriceLimitX96: %s",
-			tokenIn.Hex(), tokenOut.Hex(), fee.String(), to.Hex(), deadline.String(), amountIn.String(), amountOutMin.String(), "0")
 
-		chainID, err := v.client.Eth().ChainID(ctx)
+		opts, err = v.opts(ctx)
 		if err != nil {
-			logrus.Error(err)
-			continue
+			resp = &quoteswap.ExecuteTxResponse{
+				Status: quoteswap.TransactionStatus_FAILED,
+				Error: &quoteswap.Error{
+					Code:    5,
+					Message: fmt.Sprintf("getting opts failed: %s", err.Error()),
+				},
+			}
+
+			return resp, err
 		}
 
-		ptivateKey := os.Getenv("PRIVATE_KEY")
-		privateKeyECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(ptivateKey, "0x"))
-		if err != nil {
-			logrus.Error("!!!", err)
-			continue
-		}
-		if privateKeyECDSA == nil {
-			log.Fatal("privateKeyECDSA is nil")
-		}
-
-		auth := bind.NewKeyedTransactor(privateKeyECDSA, chainID)
-
-		nonce, err := v.client.Eth().PendingNonceAt(ctx, auth.From)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch nonce: %w", err)
-		}
-		auth.Nonce = big.NewInt(int64(nonce))
-
-		//currentBlock, err := v.client.Eth().BlockByNumber(ctx, nil)
-		//if err != nil {
-		//	return nil, fmt.Errorf("failed to fetch block: %w", err)
-		//}
-
-		auth.GasTipCap, err = v.client.Eth().SuggestGasTipCap(ctx) //big.NewInt(4000000000) // 4 gwei
-		if err != nil {
-			logrus.Error("!!!", err)
-			continue
-		}
-
-		//baseFee := currentBlock.BaseFee()
-		block, err := v.client.Eth().BlockByNumber(ctx, nil)
-		if err != nil {
-			return nil, fmt.Errorf("block fetch error: %w", err)
-		}
-		auth.GasFeeCap = new(big.Int).Add(block.BaseFee(), auth.GasTipCap)
-
-		auth.Value = big.NewInt(0)
-		auth.Context = ctx
-		auth.Value = nil
-		auth.GasLimit = 300000
-
-		tx, err = v.router.ExactInputSingle(auth, params)
+		tx, err = v.router.ExactInputSingle(opts, params)
 		if err == nil {
 			resp = &quoteswap.ExecuteTxResponse{
 				TransactionHash: tx.Hash().Hex(),
 				Status:          quoteswap.TransactionStatus_PENDING,
 				SellTokenQty:    float64(amountIn.Int64()),
-				ExecutedPrice:   float64(amountIn.Int64()),
+				ExecutedPrice:   float64(amountOut.Int64()),
 			}
 
 			return resp, nil
 		}
-		log.Printf("Swap with fee %s failed: %v", fee.String(), err)
+		logrus.Warnf("Swap with fee %s failed: %v", fee.String(), err)
 	}
 
 	resp = &quoteswap.ExecuteTxResponse{
 		Status: quoteswap.TransactionStatus_FAILED,
 		Error: &quoteswap.Error{
-			Code:    5, //not found
-			Message: fmt.Sprintf("swap failed: %v", err),
+			Code:    5,
+			Message: fmt.Sprintf("swap failed: %s", err.Error()),
 		},
 	}
 
 	return resp, err
 }
 
-func (v *V3) approveToken(ctx context.Context, token, owner, spender common.Address, amount *big.Int) error {
-	instance, err := erc20.NewBlockchain(token, v.client.Eth())
+func (v *V3) approveToken(ctx context.Context, tokenAddress, ownerAddress, spenderAddress common.Address, amount *big.Int) error {
+	token, err := erc20.NewBlockchain(tokenAddress, v.client.Eth())
 	if err != nil {
 		return err
 	}
 
-	allowance, err := instance.Allowance(&bind.CallOpts{Context: ctx}, owner, spender)
-	if err != nil {
-		return errors.New(fmt.Sprintf("checking allowance failed: %v", err))
-	}
-	log.Printf("Allowance for %s to spend: %s", routerAddress.Hex(), allowance.String())
-
-	chainID, err := v.client.Eth().ChainID(ctx)
+	allowance, err := token.Allowance(&bind.CallOpts{Context: ctx}, ownerAddress, spenderAddress)
 	if err != nil {
 		return err
 	}
 
-	ptivateKey := os.Getenv("PRIVATE_KEY")
-	privateKeyECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(ptivateKey, "0x"))
-	if err != nil {
-		return err
-	}
-	if privateKeyECDSA == nil {
-		log.Fatal("privateKeyECDSA is nil")
-	}
+	logrus.Infof("Allowance for %s to spend: %s", routerAddress.Hex(), allowance.String())
 
-	auth := bind.NewKeyedTransactor(privateKeyECDSA, chainID)
-
-	nonce, err := v.client.Eth().PendingNonceAt(ctx, auth.From)
-	if err != nil {
-		return err
-	}
-	auth.Nonce = big.NewInt(int64(nonce))
-
-	//currentBlock, err := v.client.Eth().BlockByNumber(ctx, nil)
-	//if err != nil {
-	//	return nil, fmt.Errorf("failed to fetch block: %w", err)
-	//}
-
-	auth.GasTipCap, err = v.client.Eth().SuggestGasTipCap(ctx) //big.NewInt(4000000000) // 4 gwei
+	opts, err := v.opts(ctx)
 	if err != nil {
 		return err
 	}
 
-	//baseFee := currentBlock.BaseFee()
-	block, err := v.client.Eth().BlockByNumber(ctx, nil)
-	if err != nil {
-		return err
-	}
-	auth.GasFeeCap = new(big.Int).Add(block.BaseFee(), auth.GasTipCap)
-
-	auth.Value = big.NewInt(0)
-	auth.Context = ctx
-	auth.Value = nil
-	auth.GasLimit = 300000
-
+	var tx *types.Transaction
 	if allowance.Cmp(amount) < 0 {
-		tx, err := instance.Approve(auth, spender, amount)
+		tx, err = token.Approve(opts, spenderAddress, amount)
 		if err != nil {
-			return errors.New(fmt.Sprintf("token approval failed: %v", err))
+			return err
 		}
 
 		for {
 			receipt, err := v.client.Eth().TransactionReceipt(ctx, tx.Hash())
 			if err == nil && receipt != nil {
+				if receipt.Status == 1 {
+					logrus.Info("approve tx was successful")
+				} else {
+					logrus.Info("approve tx failed")
+				}
 				break
 			}
 			time.Sleep(3 * time.Second)
 		}
 	}
 	return nil
+}
+
+func (v *V3) opts(ctx context.Context) (*bind.TransactOpts, error) {
+	chainID, err := v.client.Eth().ChainID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ptivateKey := os.Getenv("PRIVATE_KEY")
+	privateKeyECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(ptivateKey, "0x"))
+	if err != nil {
+		return nil, err
+	}
+	if privateKeyECDSA == nil {
+		return nil, errors.New("privateKeyECDSA is nil")
+	}
+
+	auth := bind.NewKeyedTransactor(privateKeyECDSA, chainID)
+
+	nonce, err := v.client.Eth().PendingNonceAt(ctx, auth.From)
+	if err != nil {
+		return nil, err
+	}
+	auth.Nonce = big.NewInt(int64(nonce))
+
+	auth.GasTipCap, err = v.client.Eth().SuggestGasTipCap(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	header, err := v.client.Eth().HeaderByNumber(context.Background(), nil)
+	if err != nil {
+		return nil, err
+	}
+	auth.GasFeeCap = new(big.Int).Add(header.BaseFee, auth.GasTipCap)
+
+	auth.Value = big.NewInt(0)
+	auth.Context = ctx
+	auth.GasLimit = 300000
+
+	return auth, nil
 }

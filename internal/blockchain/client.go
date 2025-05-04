@@ -19,9 +19,9 @@ const (
 )
 
 var rpcURLs = map[string]string{
-	ChainBSC:  "https://bsc-mainnet.infura.io/v3/",
-	ChainETH:  "https://mainnet.infura.io/v3/",
-	ChainBase: "https://base-mainnet.infura.io/v3/",
+	ChainBSC:  os.Getenv("CHAIN_BSC"),
+	ChainETH:  os.Getenv("CHAIN_ETH"),
+	ChainBase: os.Getenv("CHAIN_BASE"),
 }
 
 type Client struct {

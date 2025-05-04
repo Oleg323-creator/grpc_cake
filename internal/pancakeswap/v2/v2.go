@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/sirupsen/logrus"
 	"grpc_cake/gen/go/quoteswap"
@@ -74,132 +74,59 @@ func (v *V2) GetQuote(ctx context.Context, req *quoteswap.GetQuoteRequest) (resp
 	return resp, err
 }
 
-func (v *V2) ExecuteSwap(ctx context.Context, req *quoteswap.ExecuteTxRequest) (*quoteswap.ExecuteTxResponse, error) {
+func (v *V2) ExecuteSwap(ctx context.Context, req *quoteswap.ExecuteTxRequest) (resp *quoteswap.ExecuteTxResponse, err error) {
 	quote := req.QuotingResponse
 
 	amountIn := new(big.Int)
 	if _, ok := amountIn.SetString(quote.InAmount, 10); !ok {
-		return nil, errors.New("invalid in_amount value")
+		return nil, errors.New("invalid amount in value")
 	}
 
-	amountOutMin := new(big.Int)
-	if _, ok := amountOutMin.SetString(quote.OutAmount, 10); !ok {
-		return nil, errors.New("invalid out_amount value")
-	}
+	amountOut := new(big.Int)
+	amountOut.SetString(quote.OutAmount, 10)
 
-	fromToken := common.HexToAddress(quote.InputToken)
-	toToken := common.HexToAddress(quote.OutputToken)
-	recipient := common.HexToAddress(req.RecipientAddress)
+	tokenIn := common.HexToAddress(quote.InputToken)
+	tokenOut := common.HexToAddress(quote.OutputToken)
 
-	if err := v.approveToken(ctx, fromToken, recipient, v.routerAddress, amountIn); err != nil {
-		return &quoteswap.ExecuteTxResponse{
+	recipient := common.HexToAddress(os.Getenv("RECIPIENT_ADDR"))
+
+	err = v.approveToken(ctx, tokenIn, recipient, v.routerAddress, amountIn)
+	if err != nil {
+		resp = &quoteswap.ExecuteTxResponse{
 			Status: quoteswap.TransactionStatus_FAILED,
-			Error:  &quoteswap.Error{Code: 5, Message: err.Error()},
-		}, nil
+			Error: &quoteswap.Error{
+				Code:    1,
+				Message: fmt.Sprintf("approval failed: %s", err.Error()),
+			},
+		}
+
+		return resp, err
 	}
-
-	//amountOutMin := new(big.Int).Mul(amountOutMin, big.NewInt(int64(10000-quote.SlippageBps)))
-	//amountOutMin.Div(amountOutMin, big.NewInt(10000))
-	//fmt.Printf("Slippage BPS: %d, Amount Out: %s, Amount Out Min: %s\n", quote.SlippageBps, amountOutMin.String(), amountOutMin.String())
-
-	//fmt.Println(1)
-	//amountOutmin, err := v.router.GetAmountsOut(&bind.CallOpts{Context: ctx}, amountIn, []common.Address{fromToken, toToken})
-	//if err != nil {
-	//	return &quoteswap.ExecuteTxResponse{
-	//		Status: quoteswap.TransactionStatus_FAILED,
-	//		Error:  &quoteswap.Error{Code: 5, Message: err.Error()},
-	//	}, nil
-	//}
-	//fmt.Printf("GetAmountsOut result: %v\n", amountOutmin)
-	//fmt.Printf("Calculated amounts out: %s\n", amountOutmin[len(amountOutmin)-1].String())
-	//fmt.Println(2)
-	//fmt.Println("Trying to execute swap with the following values:")
-	//fmt.Printf("Amount In: %s\n", amountIn.String())
-	//
-	//fmt.Printf("From Token: %s\n", fromToken.Hex())
-	//fmt.Printf("To Token: %s\n", toToken.Hex())
-	//if len(amountOutmin) < 2 || amountOutmin[len(amountOutmin)-1].Cmp(big.NewInt(0)) == 0 {
-	//	return &quoteswap.ExecuteTxResponse{
-	//		Status: quoteswap.TransactionStatus_FAILED,
-	//		Error:  &quoteswap.Error{Code: 5, Message: "Insufficient liquidity for swap."},
-	//	}, nil
-	//}
-	//fmt.Println(3)
-	//amountOutMin := new(big.Int).Mul(amountOutmin[len(amountOutmin)-1], big.NewInt(int64(10000-quote.SlippageBps)))
-	//amountOutMin.Div(amountOutMin, big.NewInt(10000))
-	//fmt.Printf("Amount Out Min: %s\n", amountOutMin.String())
-	//fmt.Printf("Slippage BPS: %d, Amount Out: %s, Amount Out Min: %s\n", quote.SlippageBps, amountOutMin.String(), amountOutMin.String())
-	//
-	//fmt.Printf("Calculated amounts out: %s\n", amountOutMin)
 
 	deadline := big.NewInt(time.Now().Add(10 * time.Minute).Unix())
 
-	chainID, err := v.client.Eth().ChainID(ctx)
+	logrus.Infof("Preparing swap with parameters:\n TokenIn: %s;\n TokenOut: %s;\n AmountIn: %s;\n AmountOutMin: %s;\n Recipient: %s;\n Deadline: %s;\n",
+		tokenIn.Hex(), tokenOut.Hex(), amountIn.String(), amountOut.String(), recipient.Hex(), deadline.String())
+
+	var tx *types.Transaction
+	opts, err := v.opts(ctx)
 	if err != nil {
-		return &quoteswap.ExecuteTxResponse{
+		resp = &quoteswap.ExecuteTxResponse{
 			Status: quoteswap.TransactionStatus_FAILED,
-			Error:  &quoteswap.Error{Code: 5, Message: err.Error()},
-		}, nil
-	}
-	fmt.Println(4)
-	ptivateKey := os.Getenv("PRIVATE_KEY")
-	privateKeyECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(ptivateKey, "0x"))
-	if err != nil {
-		return &quoteswap.ExecuteTxResponse{
-			Status: quoteswap.TransactionStatus_FAILED,
-			Error:  &quoteswap.Error{Code: 5, Message: err.Error()},
-		}, nil
+			Error: &quoteswap.Error{
+				Code:    5,
+				Message: fmt.Sprintf("getting opts failed: %s", err.Error()),
+			},
+		}
+
+		return resp, err
 	}
 
-	if privateKeyECDSA == nil {
-		log.Fatal("privateKeyECDSA is nil")
-	}
-
-	auth := bind.NewKeyedTransactor(privateKeyECDSA, chainID)
-
-	nonce, err := v.client.Eth().PendingNonceAt(ctx, auth.From)
-	if err != nil {
-		return &quoteswap.ExecuteTxResponse{
-			Status: quoteswap.TransactionStatus_FAILED,
-			Error:  &quoteswap.Error{Code: 5, Message: err.Error()},
-		}, nil
-	}
-	auth.Nonce = big.NewInt(int64(nonce))
-
-	//currentBlock, err := v.client.Eth().BlockByNumber(ctx, nil)
-	//if err != nil {
-	//	return nil, fmt.Errorf("failed to fetch block: %w", err)
-	//}
-
-	auth.GasTipCap, err = v.client.Eth().SuggestGasTipCap(ctx) //big.NewInt(4000000000) // 4 gwei
-	if err != nil {
-		return &quoteswap.ExecuteTxResponse{
-			Status: quoteswap.TransactionStatus_FAILED,
-			Error:  &quoteswap.Error{Code: 5, Message: err.Error()},
-		}, nil
-	}
-
-	//baseFee := currentBlock.BaseFee()
-	header, err := v.client.Eth().HeaderByNumber(context.Background(), nil) // nil для последнего блока
-	if err != nil {
-		return &quoteswap.ExecuteTxResponse{
-			Status: quoteswap.TransactionStatus_FAILED,
-			Error:  &quoteswap.Error{Code: 5, Message: err.Error()},
-		}, nil
-	}
-
-	auth.GasFeeCap = new(big.Int).Add(header.BaseFee, auth.GasTipCap)
-
-	auth.Value = big.NewInt(0)
-	auth.Context = ctx
-	auth.Value = nil
-	auth.GasLimit = 300000
-
-	tx, err := v.router.SwapExactTokensForTokens(
-		auth,
+	tx, err = v.router.SwapExactTokensForTokens(
+		opts,
 		amountIn,
-		amountOutMin,
-		[]common.Address{fromToken, toToken},
+		amountOut,
+		[]common.Address{tokenIn, tokenOut},
 		recipient,
 		deadline,
 	)
@@ -210,14 +137,14 @@ func (v *V2) ExecuteSwap(ctx context.Context, req *quoteswap.ExecuteTxRequest) (
 		}, nil
 	}
 
-	//executedPrice := calculateExecutedPrice(amountIn, amountOutMin)
-
-	return &quoteswap.ExecuteTxResponse{
+	resp = &quoteswap.ExecuteTxResponse{
 		TransactionHash: tx.Hash().Hex(),
 		Status:          quoteswap.TransactionStatus_PENDING,
 		SellTokenQty:    float64(amountIn.Int64()),
-		ExecutedPrice:   float64(amountIn.Int64()),
-	}, nil
+		ExecutedPrice:   float64(amountOut.Int64()),
+	}
+
+	return resp, nil
 }
 
 func (v *V2) approveToken(ctx context.Context, tokenAddress, ownerAddress, spenderAddress common.Address, amount *big.Int) error {
@@ -231,47 +158,16 @@ func (v *V2) approveToken(ctx context.Context, tokenAddress, ownerAddress, spend
 		return err
 	}
 
-	chainID, err := v.client.Eth().ChainID(ctx)
+	logrus.Infof("Allowance for %s to spend: %s", v.routerAddress.Hex(), allowance.String())
+
+	opts, err := v.opts(ctx)
 	if err != nil {
 		return err
 	}
 
-	ptivateKey := os.Getenv("PRIVATE_KEY")
-	privateKeyECDSA, err := crypto.HexToECDSA(strings.TrimPrefix(ptivateKey, "0x"))
-	if err != nil {
-		return err
-	}
-	if privateKeyECDSA == nil {
-		log.Fatal("privateKeyECDSA is nil")
-	}
-
-	auth := bind.NewKeyedTransactor(privateKeyECDSA, chainID)
-
-	nonce, err := v.client.Eth().PendingNonceAt(ctx, auth.From)
-	if err != nil {
-		return err
-	}
-	auth.Nonce = big.NewInt(int64(nonce))
-
-	auth.GasTipCap, err = v.client.Eth().SuggestGasTipCap(ctx)
-	if err != nil {
-		return err
-	}
-
-	header, err := v.client.Eth().HeaderByNumber(context.Background(), nil) // nil для последнего блока
-	if err != nil {
-		log.Fatalf("Не удалось получить заголовок блока: %v", err)
-	}
-
-	auth.GasFeeCap = new(big.Int).Add(header.BaseFee, auth.GasTipCap)
-
-	auth.Value = big.NewInt(0)
-	auth.Context = ctx
-	auth.Value = nil
-	auth.GasLimit = 300000
-
+	var tx *types.Transaction
 	if allowance.Cmp(amount) < 0 {
-		tx, err := token.Approve(auth, spenderAddress, amount)
+		tx, err = token.Approve(opts, spenderAddress, amount)
 		if err != nil {
 			return err
 		}
@@ -292,22 +188,7 @@ func (v *V2) approveToken(ctx context.Context, tokenAddress, ownerAddress, spend
 	return nil
 }
 
-func calculateAmountOutMin(amountOut *big.Int, slippageBps uint32) *big.Int {
-	slippage := new(big.Int).Mul(amountOut, big.NewInt(int64(slippageBps)))
-	slippage.Div(slippage, big.NewInt(10000)) //basic (100 = 1%)
-	return new(big.Int).Sub(amountOut, slippage)
-}
-
-func calculateExecutedPrice(amountIn, amountOut *big.Int) float64 {
-	if amountOut.Sign() == 0 {
-		return 0.0
-	}
-	price := new(big.Float).Quo(new(big.Float).SetInt(amountOut), new(big.Float).SetInt(amountIn))
-	result, _ := price.Float64()
-	return result
-}
-
-func (v *V2) prepareTx(ctx context.Context) (*bind.TransactOpts, error) {
+func (v *V2) opts(ctx context.Context) (*bind.TransactOpts, error) {
 	chainID, err := v.client.Eth().ChainID(ctx)
 	if err != nil {
 		return nil, err
@@ -319,7 +200,7 @@ func (v *V2) prepareTx(ctx context.Context) (*bind.TransactOpts, error) {
 		return nil, err
 	}
 	if privateKeyECDSA == nil {
-		log.Fatal("privateKeyECDSA is nil")
+		return nil, errors.New("privateKeyECDSA is nil")
 	}
 
 	auth := bind.NewKeyedTransactor(privateKeyECDSA, chainID)
@@ -335,16 +216,14 @@ func (v *V2) prepareTx(ctx context.Context) (*bind.TransactOpts, error) {
 		return nil, err
 	}
 
-	//baseFee := currentBlock.BaseFee()
-	block, err := v.client.Eth().BlockByNumber(ctx, nil)
+	header, err := v.client.Eth().HeaderByNumber(context.Background(), nil)
 	if err != nil {
 		return nil, err
 	}
-	auth.GasFeeCap = new(big.Int).Add(block.BaseFee(), auth.GasTipCap)
+	auth.GasFeeCap = new(big.Int).Add(header.BaseFee, auth.GasTipCap)
 
 	auth.Value = big.NewInt(0)
 	auth.Context = ctx
-	auth.Value = nil
 	auth.GasLimit = 300000
 
 	return auth, nil

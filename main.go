@@ -56,13 +56,19 @@ func main() {
 
 	reflection.Register(s)
 
-	listener, err := net.Listen("tcp", ":50051")
-	if err != nil {
-		logrus.Errorf("failed to listen: %v", err)
+	port := os.Getenv("GRPC_PORT")
+	if port == "" {
+		port = "50051"
 	}
 
+	listener, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		logrus.Fatalf("failed to listen: %v", err)
+	}
+
+	logrus.Info("Starting QuoteSwap service...")
+
 	go func() {
-		logrus.Info("Starting QuoteSwap service...")
 		if err := s.Serve(listener); err != nil {
 			logrus.Errorf("failed to serve: %v", err)
 		}
